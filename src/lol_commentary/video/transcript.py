@@ -22,10 +22,13 @@ class TranscriptSegment:
 class TranscriptFetcher:
     PREFERRED_LANGUAGES = ["ja", "en"]
 
+    def __init__(self):
+        self.api = YouTubeTranscriptApi()
+
     def fetch(self, video_id: str) -> list[TranscriptSegment]:
         """Fetch transcript/subtitles for a YouTube video."""
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcript_list = self.api.list(video_id)
 
             # Try manually created transcripts first
             try:

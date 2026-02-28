@@ -48,18 +48,30 @@ class CommentaryFormatter:
 
     def display_rich(self, output: CommentaryOutput):
         """Display commentary in rich terminal format."""
-        # Game info header
         info = output.game_info
         self.console.print()
-        self.console.print(Panel(
-            f"[bold]Match:[/bold] {info.match_id}\n"
-            f"[bold]Patch:[/bold] {info.patch}  |  [bold]Duration:[/bold] {info.duration}\n"
-            f"[bold]Blue:[/bold] {', '.join(info.blue_team)}\n"
-            f"[bold]Red:[/bold] {', '.join(info.red_team)}\n"
-            f"[bold]Winner:[/bold] {'ブルー' if info.winner == 'blue' else 'レッド'}",
-            title="[bold cyan]LoL Commentary[/bold cyan]",
-            border_style="cyan",
-        ))
+
+        if output.analysis_mode == "frame_based":
+            # Frame-based analysis header
+            panel_content = f"[bold]Video:[/bold] {output.video_title}\n"
+            panel_content += f"[bold]Mode:[/bold] フレームベース分析\n"
+            panel_content += f"[bold]Frames:[/bold] {len(output.frames)}フレーム抽出済み"
+            self.console.print(Panel(
+                panel_content,
+                title="[bold yellow]LoL Commentary (Frame-Based)[/bold yellow]",
+                border_style="yellow",
+            ))
+        else:
+            # Riot API analysis header
+            self.console.print(Panel(
+                f"[bold]Match:[/bold] {info.match_id}\n"
+                f"[bold]Patch:[/bold] {info.patch}  |  [bold]Duration:[/bold] {info.duration}\n"
+                f"[bold]Blue:[/bold] {', '.join(info.blue_team)}\n"
+                f"[bold]Red:[/bold] {', '.join(info.red_team)}\n"
+                f"[bold]Winner:[/bold] {'ブルー' if info.winner == 'blue' else 'レッド'}",
+                title="[bold cyan]LoL Commentary[/bold cyan]",
+                border_style="cyan",
+            ))
 
         # Draft analysis
         if info.draft_analysis:
@@ -107,5 +119,8 @@ class CommentaryFormatter:
             if entries:
                 avg_sig = sum(e.significance for e in entries) / len(entries)
                 table.add_row(entry_type, str(len(entries)), f"{avg_sig:.2f}")
+
+        if output.frames:
+            table.add_row("frames", str(len(output.frames)), "-")
 
         self.console.print(table)

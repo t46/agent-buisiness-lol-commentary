@@ -14,6 +14,116 @@ console = Console()
 logger = logging.getLogger("lol_commentary")
 
 
+def _build_frame_based_output(video_info, transcript, extracted_frames, settings, console):
+    """Build commentary output from extracted frames when Riot API is unavailable."""
+    from .video.frame_extractor import FrameExtractor
+    from .video.ocr_engine import OCREngine
+    from .output.segment_context import (
+        CommentaryEntry, CommentaryOutput, FrameAnalysis, GameContext,
+    )
+
+    frames_dir = settings.DATA_DIR / "frames" / video_info.video_id
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    ocr = OCREngine()
+    frame_analyses = []
+    commentary_entries = []
+    prev_scores = {"blue": 0, "red": 0}
+
+    # If we have no extracted frames but have a video, extract them now
+    if not extracted_frames and video_info.filepath and video_info.filepath.exists():
+        try:
+            with FrameExtractor(video_info.filepath) as extractor:
+                extracted_frames = extractor.extract_at_intervals(
+                    interval_seconds=30.0,
+                    start_time=60.0,
+                    end_time=min(extractor.duration, 600.0),
+                )
+        except Exception as e:
+            console.print(f"[yellow]⚠ フレーム抽出失敗: {e}[/yellow]")
+
+    # Open extractor once for HUD region extraction
+    hud_extractor = None
+    if video_info.filepath and video_info.filepath.exists():
+        try:
+            hud_extractor = FrameExtractor(video_info.filepath)
+        except Exception:
+            pass
+
+    import cv2
+    for i, ef in enumerate(extracted_frames):
+        # Save frame as JPEG
+        frame_path = frames_dir / f"frame_{i:04d}_{ef.timestamp:.0f}s.jpg"
+        cv2.imwrite(str(frame_path), ef.frame)
+
+        # Best-effort OCR for timer and scores
+        ocr_timer = None
+        ocr_scores = {}
+        if hud_extractor:
+            try:
+                hud = hud_extractor.get_hud_regions(ef.frame)
+                if "timer" in hud:
+                    ocr_timer = ocr.read_timer(hud["timer"])
+                if "blue_score" in hud:
+                    blue_score = ocr.read_score(hud["blue_score"])
+                    if blue_score is not None:
+                        ocr_scores["blue"] = blue_score
+                if "red_score" in hud:
+                    red_score = ocr.read_score(hud["red_score"])
+                    if red_score is not None:
+                        ocr_scores["red"] = red_score
+            except Exception:
+                pass
+
+        fa = FrameAnalysis(
+            timestamp=ef.timestamp,
+            frame_path=str(frame_path),
+            ocr_timer=ocr_timer,
+            ocr_scores=ocr_scores,
+        )
+        frame_analyses.append(fa)
+
+        # Detect score changes to generate basic commentary
+        cur_blue = ocr_scores.get("blue", prev_scores["blue"])
+        cur_red = ocr_scores.get("red", prev_scores["red"])
+        if cur_blue > prev_scores["blue"] or cur_red > prev_scores["red"]:
+            time_str = ocr_timer or f"{int(ef.timestamp) // 60:02d}:{int(ef.timestamp) % 60:02d}"
+            if cur_blue > prev_scores["blue"]:
+                msg = f"ブルーチームがキルを獲得 (スコア: {cur_blue}-{cur_red})"
+            else:
+                msg = f"レッドチームがキルを獲得 (スコア: {cur_blue}-{cur_red})"
+            commentary_entries.append(CommentaryEntry(
+                video_time=time_str,
+                game_time=time_str,
+                type="team",
+                message=msg,
+                significance=0.5,
+            ))
+            prev_scores = {"blue": cur_blue, "red": cur_red}
+
+    if hud_extractor:
+        hud_extractor.close()
+
+    console.print(f"[green]✓[/green] フレーム保存: {len(frame_analyses)}フレーム → {frames_dir}")
+
+    transcript_dicts = [
+        {"start": s.start, "duration": s.duration, "text": s.text}
+        for s in transcript
+    ] if transcript else []
+
+    game_ctx = GameContext()
+    commentary_output = CommentaryOutput(
+        game_info=game_ctx,
+        commentary=commentary_entries,
+        frames=frame_analyses,
+        video_title=video_info.title,
+        transcript_segments=transcript_dicts,
+        analysis_mode="frame_based",
+    )
+    console.print(f"[green]✓[/green] フレームベース解説: {len(commentary_entries)}エントリ, {len(frame_analyses)}フレーム")
+    return commentary_output
+
+
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 def cli(verbose: bool):
@@ -79,8 +189,9 @@ def analyze(url: str, output: str | None, match_id: str | None, no_download: boo
             console.print(f"[yellow]⚠ 字幕取得失敗: {e}[/yellow]")
             transcript = []
 
-        # Step 4: OCR (if video downloaded)
+        # Step 4: Multi-frame OCR (if video downloaded)
         player_names = []
+        extracted_frames = []
         if video_info.filepath and video_info.filepath.exists():
             progress.update(task, description="OCRでプレイヤー名を抽出中...")
             try:
@@ -88,18 +199,29 @@ def analyze(url: str, output: str | None, match_id: str | None, no_download: boo
                 from .video.ocr_engine import OCREngine
 
                 with FrameExtractor(video_info.filepath) as extractor:
-                    # Extract a frame from early game (around 2 minutes)
-                    frame = extractor.extract_at_time(120)
-                    if frame:
-                        hud = extractor.get_hud_regions(frame.frame)
-                        ocr = OCREngine()
+                    # Extract frames at 30-second intervals for better coverage
+                    extracted_frames = extractor.extract_at_intervals(
+                        interval_seconds=30.0,
+                        start_time=60.0,  # skip intro
+                        end_time=min(extractor.duration, 600.0),  # up to 10 min
+                    )
+                    console.print(f"[green]✓[/green] フレーム抽出: {len(extracted_frames)}フレーム")
+
+                    ocr = OCREngine()
+                    best_names = []
+                    for ef in extracted_frames:
+                        hud = extractor.get_hud_regions(ef.frame)
                         names = ocr.extract_all_player_names(
                             hud.get("blue_player_names", []),
                             hud.get("red_player_names", []),
                         )
-                        player_names = names.get("blue", []) + names.get("red", [])
-                        if player_names:
-                            console.print(f"[green]✓[/green] プレイヤー名検出: {', '.join(player_names)}")
+                        candidates = names.get("blue", []) + names.get("red", [])
+                        if len(candidates) > len(best_names):
+                            best_names = candidates
+
+                    player_names = best_names
+                    if player_names:
+                        console.print(f"[green]✓[/green] プレイヤー名検出: {', '.join(player_names)}")
             except Exception as e:
                 console.print(f"[yellow]⚠ OCR失敗: {e}[/yellow]")
 
@@ -132,170 +254,189 @@ def analyze(url: str, output: str | None, match_id: str | None, no_download: boo
                 console.print(f"[yellow]⚠ マッチ検索失敗: {e}[/yellow]")
 
         if not found_match_id:
-            console.print("[red]マッチIDが特定できませんでした。--match-id オプションで指定してください。[/red]")
-            sys.exit(1)
+            console.print("[yellow]⚠ マッチIDが特定できませんでした。フレームベース分析に切り替えます。[/yellow]")
 
-        # Step 6: Fetch and parse timeline
-        progress.update(task, description="タイムラインを解析中...")
-        try:
-            from .riot_api.client import RiotAPIClient
-            from .riot_api.timeline_parser import TimelineParser
+        if found_match_id:
+            # === Riot API path ===
+            # Step 6: Fetch and parse timeline
+            progress.update(task, description="タイムラインを解析中...")
+            try:
+                from .riot_api.client import RiotAPIClient
+                from .riot_api.timeline_parser import TimelineParser
 
-            if 'client' not in locals():
-                client = RiotAPIClient(
-                    api_key=settings.RIOT_API_KEY,
-                    region=settings.REGION,
-                    cache_dir=settings.CACHE_DIR,
+                if 'client' not in locals():
+                    client = RiotAPIClient(
+                        api_key=settings.RIOT_API_KEY,
+                        region=settings.REGION,
+                        cache_dir=settings.CACHE_DIR,
+                    )
+
+                match_info = client.get_match(found_match_id)
+                raw_timeline = client.get_match_timeline(found_match_id)
+                parser = TimelineParser()
+                events = parser.parse(raw_timeline)
+                console.print(f"[green]✓[/green] タイムライン: {len(events)}イベント")
+            except Exception as e:
+                console.print(f"[yellow]⚠ タイムライン取得失敗: {e}[/yellow]")
+                console.print("[yellow]フレームベース分析にフォールバックします。[/yellow]")
+                found_match_id = None
+
+        if found_match_id:
+            # Step 7: Analysis (Riot API path)
+            progress.update(task, description="ゲーム分析中...")
+            try:
+                from .analysis.segmenter import GameSegmenter
+                from .analysis.event_classifier import EventClassifier
+                from .analysis.play_evaluator import PlayEvaluator
+                from .analysis.draft_analyzer import DraftAnalyzer
+                from .analysis.team_analyzer import TeamAnalyzer
+                from .output.segment_context import (
+                    CommentaryEntry, CommentaryOutput, GameContext,
                 )
 
-            match_info = client.get_match(found_match_id)
-            raw_timeline = client.get_match_timeline(found_match_id)
-            parser = TimelineParser()
-            events = parser.parse(raw_timeline)
-            console.print(f"[green]✓[/green] タイムライン: {len(events)}イベント")
-        except Exception as e:
-            console.print(f"[red]✗ タイムライン取得失敗: {e}[/red]")
-            sys.exit(1)
+                # Segment the game
+                segmenter = GameSegmenter()
+                segments = segmenter.segment(events, match_info.game_duration * 1000)
 
-        # Step 7: Analysis
-        progress.update(task, description="ゲーム分析中...")
-        try:
-            from .analysis.segmenter import GameSegmenter
-            from .analysis.event_classifier import EventClassifier
-            from .analysis.play_evaluator import PlayEvaluator
-            from .analysis.draft_analyzer import DraftAnalyzer
-            from .analysis.team_analyzer import TeamAnalyzer
-            from .output.segment_context import (
-                CommentaryEntry, CommentaryOutput, GameContext,
-            )
+                # Classify events
+                classifier = EventClassifier()
 
-            # Segment the game
-            segmenter = GameSegmenter()
-            segments = segmenter.segment(events, match_info.game_duration * 1000)
+                # Draft analysis
+                draft_analyzer = DraftAnalyzer()
+                draft = draft_analyzer.analyze(match_info)
 
-            # Classify events
-            classifier = EventClassifier()
+                # Team analysis
+                team_analyzer = TeamAnalyzer()
+                team_analyses = team_analyzer.analyze(match_info, events)
 
-            # Draft analysis
-            draft_analyzer = DraftAnalyzer()
-            draft = draft_analyzer.analyze(match_info)
+                # Play evaluation
+                evaluator = PlayEvaluator()
 
-            # Team analysis
-            team_analyzer = TeamAnalyzer()
-            team_analyses = team_analyzer.analyze(match_info, events)
+                # Build commentary
+                blue_players = [p for p in match_info.participants if p.team_id == 100]
+                red_players = [p for p in match_info.participants if p.team_id == 200]
+                winner = "blue" if any(p.win for p in blue_players) else "red"
 
-            # Play evaluation
-            evaluator = PlayEvaluator()
+                duration_secs = match_info.game_duration
+                game_ctx = GameContext(
+                    match_id=found_match_id,
+                    patch=match_info.game_version.rsplit(".", 1)[0] if "." in match_info.game_version else match_info.game_version,
+                    duration=f"{duration_secs // 60}:{duration_secs % 60:02d}",
+                    blue_team=[p.riot_id_game_name or p.champion_name for p in blue_players],
+                    red_team=[p.riot_id_game_name or p.champion_name for p in red_players],
+                    blue_champions=[p.champion_name for p in blue_players],
+                    red_champions=[p.champion_name for p in red_players],
+                    draft_analysis=draft.matchup_summary,
+                    winner=winner,
+                )
 
-            # Build commentary
-            blue_players = [p for p in match_info.participants if p.team_id == 100]
-            red_players = [p for p in match_info.participants if p.team_id == 200]
-            winner = "blue" if any(p.win for p in blue_players) else "red"
+                commentary_entries = []
 
-            duration_secs = match_info.game_duration
-            game_ctx = GameContext(
-                match_id=found_match_id,
-                patch=match_info.game_version.rsplit(".", 1)[0] if "." in match_info.game_version else match_info.game_version,
-                duration=f"{duration_secs // 60}:{duration_secs % 60:02d}",
-                blue_team=[p.riot_id_game_name or p.champion_name for p in blue_players],
-                red_team=[p.riot_id_game_name or p.champion_name for p in red_players],
-                blue_champions=[p.champion_name for p in blue_players],
-                red_champions=[p.champion_name for p in red_players],
-                draft_analysis=draft.matchup_summary,
-                winner=winner,
-            )
+                # Add draft commentary at start
+                commentary_entries.append(CommentaryEntry(
+                    video_time="00:00",
+                    game_time="00:00",
+                    type="overall",
+                    message=draft.matchup_summary,
+                    significance=0.7,
+                ))
 
-            commentary_entries = []
+                # Process each segment
+                for segment in segments:
+                    for event in segment.events:
+                        score = classifier.classify(event)
+                        if score.total < 0.2:
+                            continue
 
-            # Add draft commentary at start
-            commentary_entries.append(CommentaryEntry(
-                video_time="00:00",
-                game_time="00:00",
-                type="overall",
-                message=draft.matchup_summary,
-                significance=0.7,
-            ))
+                        game_secs = event.timestamp // 1000
+                        game_time = f"{game_secs // 60:02d}:{game_secs % 60:02d}"
+                        # Approximate video time (could be offset)
+                        video_time = game_time
 
-            # Process each segment
-            for segment in segments:
-                for event in segment.events:
-                    score = classifier.classify(event)
-                    if score.total < 0.2:
-                        continue
+                        # Determine commentary type
+                        if event.type == "CHAMPION_KILL":
+                            evaluation = evaluator.evaluate_kill(event, match_info)
+                            entry_type = "player"
+                            message = f"{evaluation.reason}。{evaluation.impact}"
+                        elif event.type in ("ELITE_MONSTER_KILL", "BUILDING_KILL"):
+                            evaluation = evaluator.evaluate_objective(event, match_info)
+                            entry_type = "team"
+                            message = f"【{score.reason}】{evaluation.reason}"
+                        else:
+                            entry_type = "overall"
+                            message = score.reason
 
-                    game_secs = event.timestamp // 1000
-                    game_time = f"{game_secs // 60:02d}:{game_secs % 60:02d}"
-                    # Approximate video time (could be offset)
-                    video_time = game_time
-
-                    # Determine commentary type
-                    if event.type == "CHAMPION_KILL":
-                        evaluation = evaluator.evaluate_kill(event, match_info)
-                        entry_type = "player"
-                        message = f"{evaluation.reason}。{evaluation.impact}"
-                    elif event.type in ("ELITE_MONSTER_KILL", "BUILDING_KILL"):
-                        evaluation = evaluator.evaluate_objective(event, match_info)
-                        entry_type = "team"
-                        message = f"【{score.reason}】{evaluation.reason}"
-                    else:
-                        entry_type = "overall"
-                        message = score.reason
-
-                    commentary_entries.append(CommentaryEntry(
-                        video_time=video_time,
-                        game_time=game_time,
-                        type=entry_type,
-                        message=message,
-                        significance=score.total,
-                    ))
-
-                # Add macro commentary for macro segments
-                if segment.segment_type == "macro" and not segment.events:
-                    game_secs = segment.start_time // 1000
-                    game_time = f"{game_secs // 60:02d}:{game_secs % 60:02d}"
-
-                    # Generate macro observation
-                    blue_macro = team_analyses["blue"]
-                    red_macro = team_analyses["red"]
-                    obs = []
-                    for team_analysis in [blue_macro, red_macro]:
-                        obs.extend(team_analysis.key_observations[:1])
-
-                    if obs:
                         commentary_entries.append(CommentaryEntry(
-                            video_time=game_time,
+                            video_time=video_time,
                             game_time=game_time,
-                            type="team",
-                            message=f"マクロ状況: {'. '.join(obs)}",
-                            significance=0.3,
+                            type=entry_type,
+                            message=message,
+                            significance=score.total,
                         ))
 
-            # Sort by game time
-            commentary_entries.sort(key=lambda e: e.game_time)
+                    # Add macro commentary for macro segments
+                    if segment.segment_type == "macro" and not segment.events:
+                        game_secs = segment.start_time // 1000
+                        game_time = f"{game_secs // 60:02d}:{game_secs % 60:02d}"
 
-            commentary_output = CommentaryOutput(
-                game_info=game_ctx,
-                commentary=commentary_entries,
+                        # Generate macro observation
+                        blue_macro = team_analyses["blue"]
+                        red_macro = team_analyses["red"]
+                        obs = []
+                        for team_analysis in [blue_macro, red_macro]:
+                            obs.extend(team_analysis.key_observations[:1])
+
+                        if obs:
+                            commentary_entries.append(CommentaryEntry(
+                                video_time=game_time,
+                                game_time=game_time,
+                                type="team",
+                                message=f"マクロ状況: {'. '.join(obs)}",
+                                significance=0.3,
+                            ))
+
+                # Sort by game time
+                commentary_entries.sort(key=lambda e: e.game_time)
+
+                transcript_dicts = [
+                    {"start": s.start, "duration": s.duration, "text": s.text}
+                    for s in transcript
+                ] if transcript else []
+
+                commentary_output = CommentaryOutput(
+                    game_info=game_ctx,
+                    commentary=commentary_entries,
+                    video_title=video_info.title,
+                    transcript_segments=transcript_dicts,
+                    analysis_mode="riot_api",
+                )
+                console.print(f"[green]✓[/green] 解説生成: {len(commentary_entries)}エントリ")
+            except Exception as e:
+                console.print(f"[yellow]⚠ Riot API分析失敗: {e}[/yellow]")
+                import traceback
+                traceback.print_exc()
+                console.print("[yellow]フレームベース分析にフォールバックします。[/yellow]")
+                found_match_id = None
+
+        if not found_match_id:
+            # === Frame-based fallback path ===
+            progress.update(task, description="フレームベース分析中...")
+            commentary_output = _build_frame_based_output(
+                video_info, transcript, extracted_frames, settings, console,
             )
-            console.print(f"[green]✓[/green] 解説生成: {len(commentary_entries)}エントリ")
-        except Exception as e:
-            console.print(f"[red]✗ 分析失敗: {e}[/red]")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
 
         # Step 8: Output
         progress.update(task, description="出力中...")
         from .output.formatter import CommentaryFormatter
         formatter = CommentaryFormatter(console)
 
+        output_id = found_match_id or video_info.video_id
         if output:
             output_path = Path(output)
             json_str = formatter.to_json(commentary_output, output_path)
             console.print(f"[green]✓[/green] JSON出力: {output_path}")
         else:
-            # Default: output to data/output/<match_id>.json
-            output_path = settings.DATA_DIR / "output" / f"{found_match_id}.json"
+            output_path = settings.DATA_DIR / "output" / f"{output_id}.json"
             json_str = formatter.to_json(commentary_output, output_path)
             console.print(f"[green]✓[/green] JSON出力: {output_path}")
 

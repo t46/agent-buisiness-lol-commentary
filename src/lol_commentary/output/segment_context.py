@@ -50,13 +50,36 @@ class GameContext:
 
 
 @dataclass
+class FrameAnalysis:
+    """Analysis data from a single extracted video frame."""
+    timestamp: float  # seconds in the video
+    frame_path: str  # path to saved frame image
+    ocr_timer: str | None = None
+    ocr_scores: dict = field(default_factory=dict)  # {"blue": int, "red": int}
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "frame_path": self.frame_path,
+            "ocr_timer": self.ocr_timer,
+            "ocr_scores": self.ocr_scores,
+        }
+
+
+@dataclass
 class CommentaryOutput:
     """Complete commentary output for a game."""
     game_info: GameContext
     commentary: list[CommentaryEntry] = field(default_factory=list)
+    frames: list[FrameAnalysis] = field(default_factory=list)
+    video_title: str = ""
+    transcript_segments: list[dict] = field(default_factory=list)
+    analysis_mode: str = "riot_api"  # "riot_api" or "frame_based"
 
     def to_dict(self) -> dict:
-        return {
+        result = {
+            "analysis_mode": self.analysis_mode,
+            "video_title": self.video_title,
             "game_info": {
                 "match_id": self.game_info.match_id,
                 "patch": self.game_info.patch,
@@ -70,3 +93,8 @@ class CommentaryOutput:
             },
             "commentary": [c.to_dict() for c in self.commentary],
         }
+        if self.frames:
+            result["frames"] = [f.to_dict() for f in self.frames]
+        if self.transcript_segments:
+            result["transcript_segments"] = self.transcript_segments
+        return result
