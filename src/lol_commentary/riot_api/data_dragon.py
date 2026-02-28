@@ -46,9 +46,9 @@ class DataDragonClient:
         cache_file.write_text(json.dumps(data))
         return data
 
-    def get_champions(self) -> dict[str, ChampionData]:
+    def get_champions(self, version: str | None = None) -> dict[str, ChampionData]:
         """Download and parse champion data from Data Dragon CDN."""
-        version = self.get_latest_version()
+        version = version or self.get_latest_version()
         url = f"{DDRAGON_BASE}/cdn/{version}/data/en_US/champion.json"
         raw = self._fetch_json(url, f"champions_{version}.json")
 
@@ -63,9 +63,9 @@ class DataDragonClient:
             )
         return champions
 
-    def get_items(self) -> dict[int, ItemData]:
+    def get_items(self, version: str | None = None) -> dict[int, ItemData]:
         """Download and parse item data from Data Dragon CDN."""
-        version = self.get_latest_version()
+        version = version or self.get_latest_version()
         url = f"{DDRAGON_BASE}/cdn/{version}/data/en_US/item.json"
         raw = self._fetch_json(url, f"items_{version}.json")
 

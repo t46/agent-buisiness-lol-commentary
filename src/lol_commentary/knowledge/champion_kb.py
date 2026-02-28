@@ -71,9 +71,9 @@ class ChampionKB:
         """Update champion data from Data Dragon response."""
         for key, champ_data in champions.items():
             self.upsert_champion(
-                champion_id=int(champ_data.get("key", 0)),
-                name=champ_data.get("name", key),
-                title=champ_data.get("title", ""),
-                roles=",".join(champ_data.get("tags", [])),
+                champion_id=champ_data.key,
+                name=champ_data.name,
+                title=champ_data.title,
+                roles=",".join(champ_data.tags),
             )
         logger.info(f"Updated {len(champions)} champions from Data Dragon")
