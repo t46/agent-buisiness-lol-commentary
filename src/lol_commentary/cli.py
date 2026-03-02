@@ -556,5 +556,53 @@ def analyze_player(riot_id: str, region: str, tag: str):
         sys.exit(1)
 
 
+@cli.command("live")
+@click.argument("url")
+@click.option("--output-file", "-o", type=click.Path(), help="OBS用テキストファイル出力先")
+@click.option("--interval", type=float, default=None, help="フレーム取得間隔(秒)")
+@click.option("--start-time", "-s", type=float, default=0.0, help="VODの開始位置(秒)")
+def live(url: str, output_file: str | None, interval: float | None, start_time: float):
+    """ライブ配信のリアルタイム実況解説
+
+    YouTube Live / Twitch の配信URLを指定して、リアルタイムでAI実況解説を生成します。
+    Ctrl+C で停止します。
+    """
+    import asyncio
+    from pathlib import Path
+    from .live.runner import LiveRunner
+
+    settings = get_settings()
+
+    if not settings.ANTHROPIC_API_KEY:
+        console.print("[red]✗ ANTHROPIC_API_KEY が設定されていません。.env に追加してください。[/red]")
+        sys.exit(1)
+
+    capture_interval = interval or settings.LIVE_CAPTURE_INTERVAL
+    out_path = Path(output_file) if output_file else None
+
+    console.print(f"[bold cyan]LoL Live Commentary[/bold cyan]")
+    console.print(f"  配信URL: {url}")
+    console.print(f"  取得間隔: {capture_interval}秒")
+    if start_time > 0:
+        console.print(f"  開始位置: {int(start_time // 60)}:{int(start_time % 60):02d}")
+    if out_path:
+        console.print(f"  テキスト出力: {out_path}")
+    console.print(f"  Ctrl+C で停止\n")
+
+    runner = LiveRunner(
+        url=url,
+        api_key=settings.ANTHROPIC_API_KEY,
+        output_file=out_path,
+        interval=capture_interval,
+        min_significance=settings.LIVE_MIN_SIGNIFICANCE,
+        start_time=start_time,
+    )
+
+    try:
+        asyncio.run(runner.run())
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]配信解説を停止しました。[/bold yellow]")
+
+
 def main():
     cli()

@@ -16,6 +16,10 @@ class Settings:
     DATA_DIR: Path = field(default_factory=lambda: Path("data"))
     CACHE_DIR: Path = field(default_factory=lambda: Path("data/cache"))
     CACHE_TTL: int = 86400  # 24 hours
+    ANTHROPIC_API_KEY: str = ""
+    LIVE_CAPTURE_INTERVAL: float = 1.0
+    LIVE_COMMENTARY_COOLDOWN: float = 10.0
+    LIVE_MIN_SIGNIFICANCE: float = 0.3
 
 
 _settings: Settings | None = None
@@ -33,6 +37,10 @@ def get_settings() -> Settings:
         DATA_DIR=Path(os.getenv("DATA_DIR", "data")),
         CACHE_DIR=Path(os.getenv("CACHE_DIR", "data/cache")),
         CACHE_TTL=int(os.getenv("CACHE_TTL", "86400")),
+        ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", ""),
+        LIVE_CAPTURE_INTERVAL=float(os.getenv("LIVE_CAPTURE_INTERVAL", "1.0")),
+        LIVE_COMMENTARY_COOLDOWN=float(os.getenv("LIVE_COMMENTARY_COOLDOWN", "10.0")),
+        LIVE_MIN_SIGNIFICANCE=float(os.getenv("LIVE_MIN_SIGNIFICANCE", "0.3")),
     )
 
     _settings.DATA_DIR.mkdir(parents=True, exist_ok=True)

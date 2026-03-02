@@ -91,3 +91,32 @@ class SpectatorHUD:
             "kill_feed": cls.KILL_FEED.scale(scale_x, scale_y),
             "minimap": cls.MINIMAP.scale(scale_x, scale_y),
         }
+
+
+class PlayerHUD:
+    """HUD region definitions for LoL player (streamer) view at 1080p.
+
+    In player view the score and timer are in the top-right corner:
+      「MY_SCORE vs ENEMY_SCORE  KDA  CS  TIMER」
+    """
+    BASE_WIDTH = 1920
+    BASE_HEIGHT = 1080
+
+    # Top-right HUD bar — coordinates at 1920x1080
+    # "3 vs 6" — my team score (left number, colored blue/cyan)
+    MY_TEAM_SCORE = Region(x=1560, y=4, width=21, height=20)
+    # "3 vs 6" — enemy score (right number, colored green/red)
+    ENEMY_TEAM_SCORE = Region(x=1594, y=4, width=20, height=20)
+    # Game timer "08:22" — far right with clock icon
+    TIMER = Region(x=1830, y=0, width=90, height=27)
+
+    @classmethod
+    def get_scaled_regions(cls, width: int, height: int) -> dict[str, Region | list[Region]]:
+        """Get player HUD regions scaled to the given resolution."""
+        scale_x = width / cls.BASE_WIDTH
+        scale_y = height / cls.BASE_HEIGHT
+        return {
+            "timer": cls.TIMER.scale(scale_x, scale_y),
+            "blue_team_score": cls.MY_TEAM_SCORE.scale(scale_x, scale_y),
+            "red_team_score": cls.ENEMY_TEAM_SCORE.scale(scale_x, scale_y),
+        }
