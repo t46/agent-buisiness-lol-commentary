@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoL AI Commentary Overlay</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="overlay">
+    <div id="commentator" class="hidden">
+      <div id="avatar-container">
+        <img id="avatar" src="" alt="Avatar">
+      </div>
+      <div id="bubble-container">
+        <div id="persona-name"></div>
+        <div id="bubble">
+          <span id="commentary-text"></span>
+          <span id="cursor" class="blink">|</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="connection-status" class="disconnected">Connecting...</div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

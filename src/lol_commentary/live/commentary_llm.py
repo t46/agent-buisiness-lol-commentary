@@ -7,6 +7,7 @@ import anthropic
 
 from .event_detector import LiveEvent
 from .game_state import GameState
+from .persona import Persona, get_fill_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +44,29 @@ class CommentaryLLM:
     """Generate natural commentary text using Claude API."""
 
     MODEL = "claude-haiku-4-5-20251001"
-    def __init__(self, api_key: str, **_kwargs) -> None:
+
+    def __init__(
+        self,
+        api_key: str,
+        persona: Persona | None = None,
+        **_kwargs,
+    ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._history: list[LiveEvent] = []
+        self._persona = persona
 
-    async def generate(
-        self, event: LiveEvent, state: GameState, history: list[LiveEvent]
-    ) -> str | None:
-        """Generate commentary for an event."""
-        self._history.append(event)
+    @property
+    def _system_prompt(self) -> str:
+        if self._persona:
+            return self._persona.system_prompt
+        return SYSTEM_PROMPT
 
-        # Build context
-        phase_name = {"early": "序盤", "mid": "中盤", "late": "終盤"}.get(state.game_phase, state.game_phase)
+    def _build_context(self, state: GameState) -> str:
+        """Build context string from game state."""
+        phase_name = {"early": "序盤", "mid": "中盤", "late": "終盤"}.get(
+            state.game_phase, state.game_phase
+        )
 
-        # Kill differential and momentum
         kill_diff = state.blue_score - state.red_score
         if kill_diff > 0:
             momentum = f"ブルー側が{kill_diff}キルリード"
@@ -72,18 +82,35 @@ class CommentaryLLM:
             f"- フェーズ: {phase_name}\n"
         )
 
-        # Recent events context (for narrative flow)
         recent = self._history[-8:]
         if len(recent) > 1:
             context += "\n## 直近の流れ\n"
             for e in recent[:-1]:
                 context += f"- [{e.game_time}] {e.description}\n"
 
+        return context
+
+    async def generate(
+        self, event: LiveEvent, state: GameState, history: list[LiveEvent]
+    ) -> str | None:
+        """Generate commentary for an event."""
+        self._history.append(event)
+
+        context = self._build_context(state)
+
+        # Add excitement modifier if persona is set
+        excitement_note = ""
+        if self._persona:
+            excitement_note = (
+                f"\n\n## テンション指示\n{self._persona.get_excitement_modifier(event.significance)}\n"
+            )
+
         user_message = (
             f"{context}\n"
             f"## 今発生したイベント\n"
             f"{event.description}\n"
-            f"重要度: {event.significance:.1f}\n\n"
+            f"重要度: {event.significance:.1f}\n"
+            f"{excitement_note}\n"
             f"このイベントについて、プレイヤーの意図や判断を読み解きながら解説してください。"
         )
 
@@ -91,10 +118,35 @@ class CommentaryLLM:
             response = await self._client.messages.create(
                 model=self.MODEL,
                 max_tokens=800,
-                system=SYSTEM_PROMPT,
+                system=self._system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
             return response.content[0].text.strip()
         except Exception as e:
             logger.error("Commentary generation failed: %s", e)
+            return None
+
+    async def generate_fill(self, state: GameState) -> str | None:
+        """Generate a fill comment for quiet periods."""
+        if self._persona:
+            fill_prompt = get_fill_prompt(self._persona.id)
+        else:
+            fill_prompt = (
+                "あなたはLoLの実況解説者です。イベントの合間です。"
+                "現在の状況を踏まえて、短い繋ぎのコメントを1つ生成してください。2-3文で。"
+            )
+
+        context = self._build_context(state)
+        user_message = f"{context}\n上記の状況を踏まえて、繋ぎのコメントをお願いします。"
+
+        try:
+            response = await self._client.messages.create(
+                model=self.MODEL,
+                max_tokens=400,
+                system=fill_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.error("Fill commentary generation failed: %s", e)
             return None

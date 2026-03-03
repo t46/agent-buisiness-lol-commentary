@@ -561,10 +561,22 @@ def analyze_player(riot_id: str, region: str, tag: str):
 @click.option("--output-file", "-o", type=click.Path(), help="OBS用テキストファイル出力先")
 @click.option("--interval", type=float, default=None, help="フレーム取得間隔(秒)")
 @click.option("--start-time", "-s", type=float, default=0.0, help="VODの開始位置(秒)")
-def live(url: str, output_file: str | None, interval: float | None, start_time: float):
+@click.option("--overlay", is_flag=True, default=False, help="OBSオーバーレイサーバーを起動")
+@click.option("--overlay-port", type=int, default=None, help="オーバーレイサーバーのポート (default: 8765)")
+@click.option("--persona", type=str, default=None, help="AI実況者ペルソナID (default: kenshi)")
+def live(
+    url: str,
+    output_file: str | None,
+    interval: float | None,
+    start_time: float,
+    overlay: bool,
+    overlay_port: int | None,
+    persona: str | None,
+):
     """ライブ配信のリアルタイム実況解説
 
     YouTube Live / Twitch の配信URLを指定して、リアルタイムでAI実況解説を生成します。
+    --overlay を付けるとOBSブラウザソース用のオーバーレイサーバーが起動します。
     Ctrl+C で停止します。
     """
     import asyncio
@@ -579,14 +591,19 @@ def live(url: str, output_file: str | None, interval: float | None, start_time: 
 
     capture_interval = interval or settings.LIVE_CAPTURE_INTERVAL
     out_path = Path(output_file) if output_file else None
+    persona_id = persona or settings.DEFAULT_PERSONA
+    port = overlay_port or settings.OVERLAY_PORT
 
     console.print(f"[bold cyan]LoL Live Commentary[/bold cyan]")
     console.print(f"  配信URL: {url}")
     console.print(f"  取得間隔: {capture_interval}秒")
+    console.print(f"  ペルソナ: {persona_id}")
     if start_time > 0:
         console.print(f"  開始位置: {int(start_time // 60)}:{int(start_time % 60):02d}")
     if out_path:
         console.print(f"  テキスト出力: {out_path}")
+    if overlay:
+        console.print(f"  オーバーレイ: http://{settings.OVERLAY_HOST}:{port}")
     console.print(f"  Ctrl+C で停止\n")
 
     runner = LiveRunner(
@@ -596,6 +613,12 @@ def live(url: str, output_file: str | None, interval: float | None, start_time: 
         interval=capture_interval,
         min_significance=settings.LIVE_MIN_SIGNIFICANCE,
         start_time=start_time,
+        persona_id=persona_id,
+        overlay_port=port,
+        overlay_host=settings.OVERLAY_HOST,
+        enable_overlay=overlay,
+        min_interval=settings.COMMENTARY_MIN_INTERVAL,
+        fill_interval=settings.COMMENTARY_FILL_INTERVAL,
     )
 
     try:
