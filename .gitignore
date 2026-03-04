@@ -12,3 +12,9 @@ wheels/
 # Project data
 data/
 .env
+
+# Playwright MCP
+.playwright-mcp/
+
+# Temporary screenshots
+*.png
