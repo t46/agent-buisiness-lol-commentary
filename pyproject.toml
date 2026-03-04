@@ -21,6 +21,9 @@ dependencies = [
     "aiohttp>=3.9.0",
 ]
 
+[project.scripts]
+lol-commentary = "lol_commentary.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
