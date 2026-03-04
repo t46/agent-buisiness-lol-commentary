@@ -25,10 +25,14 @@ class OverlayServer:
         persona: Persona,
         host: str = "127.0.0.1",
         port: int = 8765,
+        video_url: str | None = None,
+        start_time: float = 0.0,
     ) -> None:
         self._persona = persona
         self._host = host
         self._port = port
+        self._video_id = self._extract_video_id(video_url) if video_url else None
+        self._start_time = int(start_time)
         self._app = web.Application()
         self._ws_clients: WeakSet[web.WebSocketResponse] = WeakSet()
         self._state = GameState()
@@ -75,6 +79,8 @@ class OverlayServer:
             },
             "state": self._state_to_dict(),
             "history": self._history[-10:],
+            "video_id": self._video_id,
+            "start_time": self._start_time,
         }
         await ws.send_json(init_msg)
 
@@ -127,6 +133,22 @@ class OverlayServer:
                 dead.append(ws)
         for ws in dead:
             self._ws_clients.discard(ws)
+
+    @staticmethod
+    def _extract_video_id(url: str) -> str | None:
+        """Extract YouTube video ID from various URL formats."""
+        import re
+        patterns = [
+            r'(?:youtube\.com/live/)([^/?&]+)',
+            r'(?:youtube\.com/watch\?v=)([^&]+)',
+            r'(?:youtu\.be/)([^/?&]+)',
+            r'(?:youtube\.com/embed/)([^/?&]+)',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, url)
+            if m:
+                return m.group(1)
+        return None
 
     def _state_to_dict(self) -> dict:
         return {

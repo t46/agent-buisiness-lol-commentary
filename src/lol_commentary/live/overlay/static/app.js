@@ -80,11 +80,27 @@ function handleInit(msg) {
     personaName.textContent = persona.name;
   }
 
+  // Embed YouTube video if video_id is provided
+  if (msg.video_id) {
+    embedVideo(msg.video_id, msg.start_time || 0);
+  }
+
   // Show most recent history item if available
   if (msg.history && msg.history.length > 0) {
     const last = msg.history[msg.history.length - 1];
     showCommentary(last.message, last.excitement || 'mid');
   }
+}
+
+function embedVideo(videoId, startTime) {
+  const container = document.getElementById('video-background');
+  const iframe = document.createElement('iframe');
+  iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&start=${startTime}&mute=0&controls=1&modestbranding=1&rel=0`;
+  iframe.allow = 'autoplay; encrypted-media';
+  iframe.allowFullscreen = true;
+  container.appendChild(iframe);
+  container.style.display = 'block';
+  document.body.classList.add('has-video');
 }
 
 function handleCommentary(data) {

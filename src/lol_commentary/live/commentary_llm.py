@@ -111,13 +111,14 @@ class CommentaryLLM:
             f"{event.description}\n"
             f"重要度: {event.significance:.1f}\n"
             f"{excitement_note}\n"
-            f"このイベントについて、プレイヤーの意図や判断を読み解きながら解説してください。"
+            f"このイベントについて解説してください。"
+            f"【重要】見出しやマークダウンは絶対に使わないで。2-3文の短い自然な話し言葉で。100文字以内を目指して。"
         )
 
         try:
             response = await self._client.messages.create(
                 model=self.MODEL,
-                max_tokens=800,
+                max_tokens=200,
                 system=self._system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )

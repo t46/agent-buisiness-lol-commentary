@@ -88,6 +88,8 @@ class LiveRunner:
                 persona=persona,
                 host=self._overlay_host,
                 port=self._overlay_port,
+                video_url=self._url,
+                start_time=self._start_time,
             )
             await overlay.start()
             logger.info(
